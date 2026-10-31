@@ -55,3 +55,5 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 Type: files; Name: "{app}\Ошибка при запуске.txt"
 Type: filesandordirs; Name: "{app}\Информация полученная в процессе работы"
 Type: dirifempty; Name: "{app}"
+; Настройки пользователя: имя, музыка, последняя сцена
+Type: filesandordirs; Name: "{userappdata}\HoursTransfer"

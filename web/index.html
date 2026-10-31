@@ -433,9 +433,15 @@
 const $ = (sel) => document.querySelector(sel);
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
 const session = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => (b % 36).toString(36)).join("");
+// Настройки (имя, музыка, сцена) хранит программа — хранилище окна между запусками не сохраняется
 const store = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key, value) { try { localStorage.setItem(key, value); } catch {} },
+  data: {},
+  async load() { this.data = await fetch("/api/settings").then((r) => r.json()).catch(() => ({})); },
+  get(key) { return this.data[key] ?? null; },
+  set(key, value) {
+    this.data[key] = value;
+    fetch(`/api/settings?session=${session}`, { method: "POST", body: JSON.stringify({ [key]: value }) }).catch(() => {});
+  },
 };
 const ICONS = {
   scene: '<svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 3-3 6 5"/></svg>',
@@ -967,6 +973,7 @@ async function runTransfer() {
 }
 
 async function init() {
+  await store.load();
   setupScenes();
   setupMusic();
   setupZones();

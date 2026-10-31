@@ -40,6 +40,35 @@ STATIC_TYPES = {
 }
 
 
+SETTINGS_KEYS = ("name", "music", "scene")
+settings_lock = threading.Lock()
+
+
+def settings_path() -> str:
+    # Имя, музыка и последняя сцена хранятся в профиле пользователя: хранилище окна
+    # между запусками не сохраняется, да и порт каждый раз новый
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "HoursTransfer", "settings.json")
+
+
+def load_settings() -> dict:
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(changes: dict):
+    with settings_lock:
+        data = load_settings()
+        data.update({k: str(v) for k, v in changes.items() if k in SETTINGS_KEYS})
+        os.makedirs(os.path.dirname(settings_path()), exist_ok=True)
+        with open(settings_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def messages_path() -> str:
     # Свои фразы можно положить рядом с программой, иначе берутся встроенные
     custom = os.path.join(os.getcwd(), "messages.json")
@@ -135,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
             path = "/index.html"
         if path == "/messages.json":
             return self.send_file(messages_path(), STATIC_TYPES[".json"])
+        if path == "/api/settings":
+            return self.send_json(load_settings())
         if path == "/api/download":
             params = self.params()
             session = self.valid_session(params)
@@ -190,6 +221,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/run":
             return self.send_json(process(session))
+
+        if path == "/api/settings":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                changes = json.loads(self.rfile.read(min(length, 10_000)) or b"{}")
+            except ValueError:
+                changes = None
+            if not isinstance(changes, dict):
+                return self.send_json({"ok": False}, 400)
+            save_settings(changes)
+            return self.send_json({"ok": True})
 
         self.send_error(404)
 
