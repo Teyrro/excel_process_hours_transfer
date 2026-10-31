@@ -1,28 +1,30 @@
-import os
-from msvcrt import getch
+import traceback
 
-from fastexcel import _fastexcel
+from excel_process import run
 
-from excel_process import ExcelProcess, curr_dir, info_dir
 
-if __name__ == '__main__':
-    if not os.path.isdir(curr_dir + info_dir):
-        os.makedirs(curr_dir + info_dir)
+def wait_key():
+    print("Ожидания нажатия клавиши...")
     try:
-        ExcelProcess()
-    except _fastexcel.CalamineError as e:
-        print(e)
-        print("Если говорить по-русски, закройте файлы указанные выше, чтобы сеанс был освобождён")
-        print("Ожидания нажатия клавиши...")
+        from msvcrt import getch
+
         getch()
-        print("Клавиша нажата!")
-    except BaseException as e:
+    except ImportError:
+        input()
+    print("Клавиша нажата!")
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except PermissionError as e:
         print(e)
-        print("Ожидания нажатия клавиши...")
-        getch()
-        print("Клавиша нажата!")
-    except ... as e:
+        print(
+            "Если говорить по-русски, закройте файлы указанные выше, чтобы сеанс был освобождён"
+        )
+        wait_key()
+    except Exception as e:
         print(e)
-        print("Ожидания нажатия клавиши...")
-        getch()
-        print("Клавиша нажата!")
+        with open("Ошибка при запуске.txt", "w", encoding="utf-8") as f:
+            f.write(traceback.format_exc())
+        wait_key()

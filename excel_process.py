@@ -1,65 +1,123 @@
+"""Перенос часов из нарядов цехов в «Расшифровку ЗП».
+
+Источники (ищутся в текущей папке по имени файла):
+  * «наряд» — наряды цехов, по листу на рабочего, месяц берётся из имени файла;
+  * «план»  — план производства, из него берутся названия заказов;
+  * «зп»    — расшифровка ЗП, в неё записываются часы.
+"""
+
 import datetime
-import decimal
 import json
 import os
 import re
-
 from collections import defaultdict
-from decimal import getcontext
+from dataclasses import dataclass, field
 
-from os import listdir
-from os.path import isfile, join
-
-import math
-
-import fastexcel
-import pandas as pd
 from openpyxl import load_workbook
-from python_calamine._python_calamine import CalamineWorkbook
+from python_calamine import CalamineWorkbook
 
 curr_dir = os.getcwd()
 info_dir = "/Информация полученная в процессе работы/"
 
-MONTHS = {
-    'январь',
-    'февраль',
-    'март',
-    'апрель',
-    'май',
-    'июнь',
-    'июль',
-    'август',
-    'сентябрь',
-    'октябрь',
-    'ноябрь',
-    'декабрь'
-}
+MONTHS = (
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+)
 
-i_dont_know_where_that = {
-    "часы",
-    "пример бланка па",
-    "бланк4"
-}
+# Листы нарядов, которые не относятся к рабочим
+SERVICE_SHEETS = {"часы", "пример бланка па", "бланк4"}
+
+PATTERN_SOURCE = "наряд"
+PATTERN_PLAN = "план"
+PATTERN_DEST = "зп"
+
+WORKSHOP_ORDER = "цех"
+# Заказы оснастки (23 счёт) идут в ЗП первыми
+TOOLING_PREFIX = "00 07"
+
+# Разметка листа наряда
+OUTFIT_MONTH_MARKER = "наряд за месяц"
+OUTFIT_ORDER_COL = 1
+OUTFIT_HOURS_COL = 3
+
+# Разметка листа плана производства
+PLAN_ORDER_HEADER = "№ заказа"
+PLAN_NAME_HEADER = "Наименование детали, узла, продукции, вида ремонта"
+
+# Разметка листа «Расшифровки ЗП» (номера строк и столбцов как в Excel, с 1)
+ZP_ORDER_NAME_ROW = 4
+ZP_ORDER_CODE_ROW = 5
+ZP_FIRST_WORKER_ROW = 9
+ZP_NAME_COL = 2
+ZP_TOTAL_COL = 5
+ZP_FIRST_ORDER_COL = 8
+ZP_ORDER_COL_STEP = 2  # каждый заказ — пара столбцов «часы | доля»
+ZP_WORKSHOP_COL = 272
+
+ORDER_CODE_RE = re.compile(r"\d{7,8}", re.ASCII)
 
 
-def get_name(sh_name, filename):
-    reader = CalamineWorkbook.from_object(filename)
-    sheet = reader.get_sheet_by_name(sh_name)
-    rows = sheet.to_python(nrows=7, skip_empty_area=True)
-    surname = sh_name.split(" ")
-    surname = surname[0]
-    flag = 0
-    for row in rows:
-        for word in row:
-            if isinstance(word, str) and re.search(f"исполнитель", word.lower()):
-                flag = 1
-                continue
-            if isinstance(word, str) and flag and re.search(f"{surname.lower()}", word.lower()):
-                return word
-            elif flag == 0:
-                continue
-            else:
-                raise Exception(f"Имя листа {sh_name} в файле {filename} не совпадает с {word}")
+@dataclass
+class MonthData:
+    # ФИО -> код заказа -> часы
+    workers: dict = field(
+        default_factory=lambda: defaultdict(lambda: defaultdict(datetime.timedelta))
+    )
+    # то же, но для строк, код которых не удалось распознать
+    not_included: dict = field(
+        default_factory=lambda: defaultdict(lambda: defaultdict(datetime.timedelta))
+    )
+    # код заказа -> наименование из плана производства
+    orders: dict = field(default_factory=dict)
+
+
+def normalize_order_code(raw: str) -> str | None:
+    """Приводит код заказа к виду «53 01 1 243».
+
+    Пробелы внутри кода не важны: «53 01 1 243», «53 01 1243», «5301 1243», «53011243»
+    дают одно и то же. Семизначный код считается кодом с потерянным ведущим нулём.
+    """
+    digits = re.sub(r"\s+", "", raw)
+    if not ORDER_CODE_RE.fullmatch(digits):
+        return None
+    digits = digits.zfill(8)
+    return f"{digits[0:2]} {digits[2:4]} {digits[4]} {digits[5:8]}"
+
+
+def parse_hours(value) -> datetime.timedelta | None:
+    if isinstance(value, datetime.timedelta):
+        return value
+    if isinstance(value, datetime.time):
+        return datetime.timedelta(
+            hours=value.hour, minutes=value.minute, seconds=value.second
+        )
+    if isinstance(value, str) and value.strip():
+        try:
+            return parse_hours(datetime.time.fromisoformat(value.strip()))
+        except ValueError:
+            return None
+    return None
+
+
+def to_hours(duration: datetime.timedelta) -> float:
+    return round(duration.total_seconds() / 3600, 2)
+
+
+def cell_text(value) -> str:
+    if isinstance(value, float) and value.is_integer():
+        # Код заказа, набранный без пробелов, Excel хранит числом
+        return str(int(value))
+    return value.strip() if isinstance(value, str) else ""
 
 
 def serialize_datetime(obj):
@@ -67,245 +125,266 @@ def serialize_datetime(obj):
         return str(obj)
 
 
-def get_sh_names(filename):
-    try:
-        wb = fastexcel.read_excel(filename)
-        return wb.sheet_names
-    except fastexcel.CalamineError as exp:
-        with open("Ошибка при запуске.txt", "w", encoding="utf-8") as f:
-            f.write(exp.args[0] + "\n возможно просто закрыть файл")
-            raise exp
+def save_json(file_name: str, data):
+    with open(curr_dir + info_dir + file_name, "w", encoding="utf8") as f:
+        f.write(
+            json.dumps(data, default=serialize_datetime, ensure_ascii=False, indent=4)
+        )
 
 
-def get_info_without_null(info: tuple, worker_info: defaultdict,
-                          not_included_worker_info: defaultdict, uniq_ords_id: dict):
-    for ord_id, hour in info:
-        ord_id = ord_id.strip().lower()
-        if (ord_id == "" or hour == "" or
-                ord_id == "ИТОГО"):
+def find_month(text: str) -> str | None:
+    text = text.lower()
+    return next((month for month in MONTHS if month in text), None)
+
+
+def get_name_files() -> list[str]:
+    return [
+        f
+        for f in os.listdir(curr_dir)
+        if os.path.isfile(os.path.join(curr_dir, f))
+        and f.lower().endswith((".xlsx", ".xls"))
+        # «~$...» — временные файлы, которые Excel создаёт рядом с открытой книгой
+        and not f.startswith("~$")
+    ]
+
+
+def filter_name_files(files: list[str], pattern: str) -> list[str]:
+    return [f for f in files if re.search(pattern, f.lower())]
+
+
+def find_single_file(files: list[str], pattern: str) -> str:
+    found = filter_name_files(files, pattern)
+    if len(found) != 1:
+        raise Exception(
+            f"Должен быть ровно один файл с «{pattern}» в имени, найдено: {found}"
+        )
+    return found[0]
+
+
+def read_executor_name(rows: list, sh_name: str, filename: str) -> str:
+    """ФИО из ячейки справа от «Исполнитель:» в шапке наряда."""
+    surname = sh_name.split(" ")[0].lower()
+    for row in rows:
+        cells = [cell_text(value) for value in row if cell_text(value)]
+        for ind, text in enumerate(cells[:-1]):
+            if "исполнитель" in text.lower():
+                name = cells[ind + 1]
+                if surname not in name.lower():
+                    raise Exception(
+                        f"Имя листа {sh_name} в файле {filename} не совпадает с {name}"
+                    )
+                return name
+    raise Exception(
+        f"На листе {sh_name} в файле {filename} не найдена ячейка «Исполнитель»"
+    )
+
+
+def read_month_outfit(rows: list, sh_name: str, filename: str):
+    """Строки (код заказа, часы) из итогового «Наряда за месяц» внизу листа."""
+    start = next(
+        (
+            ind
+            for ind, row in enumerate(rows)
+            if any(
+                cell_text(value).lower().startswith(OUTFIT_MONTH_MARKER)
+                for value in row
+            )
+        ),
+        None,
+    )
+    if start is None:
+        raise Exception(
+            f"На листе {sh_name} в файле {filename} не найден «Наряд за месяц»"
+        )
+    for row in rows[start + 1 :]:
+        if len(row) <= OUTFIT_HOURS_COL:
             continue
-        new_ord = ord_id
-        if ord_id.isnumeric() or re.search(re.compile("цех"), ord_id.lower()):
-            new_worker_info = worker_info
-            if ord_id.isnumeric():
-                if ord_id.split(" ") != 3:
-                    new_ord = ord_id[0:2] + " " + ord_id[2:4] + " " + ord_id[4:5] + " " + ord_id[5:8]
-                    uniq_ords_id[new_ord] = ""
-            else:
-                new_ord = "цех"
-        else:
-            new_worker_info = not_included_worker_info
-        try:
-            if datetime.time.fromisoformat(hour):
-                hour = datetime.timedelta(hours=int(hour[0:2]), minutes=int(hour[3:5]), seconds=int(hour[6:8]))
-            new_worker_info[new_ord] += hour
-        except ValueError:
-            pass
+        order = cell_text(row[OUTFIT_ORDER_COL])
+        if order.lower() == "итого":
+            break
+        if order and order != PLAN_ORDER_HEADER:
+            yield order, row[OUTFIT_HOURS_COL]
 
 
-def filter_name_files(name_files: dict[str, str], pattern):
-    files_source = {}
-    for file, month in name_files.items():
-        if re.search(pattern, file.lower()):
-            files_source[file] = month
-    return files_source
-
-
-def get_df(file, sh_name, skip_rows):
-    return pd.read_excel(file,
-                         sheet_name=sh_name,
-                         engine="calamine",
-                         dtype_backend="pyarrow",
-                         skiprows=skip_rows,
-                         keep_default_na=False,
-                         )
-
-
-class ExcelProcess:
-    pattern_source = r"наряд"
-    pattern_order_info = r"план"
-    pattern_dest = r"зп"
-
-    def __init__(self):
-        print("Загрузка имён файлов .xlsx началась")
-        self.files_name: dict[str, str] = self.get_name_files()
-        print("Загрузка имён файлов .xlsx окончилась")
-
-        print("Загрузка данных о рабочих началась")
-        self.workers_info, not_included_data = self.get_workers_info(self.files_name)
-        print("Загрузка данных о рабочих окончилась")
-
-        print("Загрузка номеров заказов из плана производства началась")
-        self.get_order_names(self.workers_info)
-        print("Загрузка номеров заказов из плана производства окончилась")
-        for file, data in {"Все заказы в общем и заказы каждого рабочего.json": self.workers_info,
-                           "Не вошедшие в ЗП заказы.json": not_included_data}.items():
-            with open(curr_dir + info_dir + file, "w", encoding="utf8") as f:
-                f.write(json.dumps(data, default=serialize_datetime, ensure_ascii=False, indent=4))
-        print(f"Редактирование файла ЗП началось")
-        self.input_date_in_transcript_of_the_pd(self.workers_info)
-        print(f"Редактирование файла ЗП окончилось")
-
-    @staticmethod
-    def get_name_files() -> dict[str, str]:
-        mypath = os.getcwd()
-        files: dict[str, str] = {f: "" for f in listdir(mypath) if isfile(join(mypath, f))}
-
-        files_for_deleting = []
-        pattern = re.compile(r"наряд|"
-                             r"зп|"
-                             r"план")
-        for file, nothing in files.items():
-
-            patt_res = re.search(pattern, file.lower())
-
-            if (not ((file.endswith(".xlsx") or
-                      file.endswith(".xls")) and
-                     patt_res)):
-                files_for_deleting.append(file)
-            else:
-                for month in MONTHS:
-                    if file.lower().find(month) != -1:
-                        files[file] = month
-                        break
-        for file in files_for_deleting:
-            files.pop(file)
-
-        return files
-
-    def get_workers_info(self, files_name):
-        files_source = filter_name_files(files_name, self.pattern_source)
-        if files_source == {}:
-            raise Exception("Не найден файл с именем наряд")
-        workers_info = {}
-        not_included_info = {}
-        uniq_ords_id: dict = {}
-        for file, month in files_source.items():
-
-            sheet_names = get_sh_names(file)
-            if month not in workers_info:
-                workers_info[month] = {}
-                not_included_info[month] = {}
-            workers_in_month = workers_info[month]
-            not_included_in_month = not_included_info[month]
-            for sh_name in sheet_names:
-                if not sh_name.lower() in i_dont_know_where_that:
-                    df = get_df(file, sh_name, 731)
-                    sh_name = get_name(sh_name, file)
-                    workers_in_month[sh_name] = defaultdict(datetime.timedelta)
-                    not_included_in_month[sh_name] = defaultdict(datetime.timedelta)
-                    ord_id, hour = df[df.columns[1]], df[df.columns[3]]
-                    info: tuple = tuple(sorted(zip(ord_id.tolist(), hour.tolist())))
-                    get_info_without_null(info, workers_in_month[sh_name], not_included_in_month[sh_name], uniq_ords_id)
-        workers_info[month]["ords"] = dict(sorted(uniq_ords_id.items()))
-        workers_info[month] = dict(sorted(workers_info[month].items()))
-        return workers_info, not_included_info
-
-    def get_order_names(self, workers_info):
-        file = list(filter_name_files(self.files_name, self.pattern_order_info).keys())[0]
-
-        for month in workers_info.keys():
-            sheet_names = get_sh_names(file)
-            check_month = {name.lower(): ind for ind, name in enumerate(sheet_names)}
-
-            workers_info_in_month = workers_info[month]
-            ords: dict[str, str] = workers_info_in_month["ords"]
-            if month.lower() not in check_month:
+def read_outfits(files: list[str]) -> dict[str, MonthData]:
+    months: dict[str, MonthData] = defaultdict(MonthData)
+    for file in files:
+        month = find_month(file)
+        if month is None:
+            raise Exception(f"В имени файла {file} не указан месяц")
+        data = months[month]
+        wb = CalamineWorkbook.from_path(file)
+        for sh_name in wb.sheet_names:
+            if sh_name.lower() in SERVICE_SHEETS:
                 continue
-            df = get_df(file, check_month[month], 9)
-            df = df[["№ заказа", "Наименование детали, узла, продукции, вида ремонта"]].where(
-                df["№ заказа"] != "").dropna()
-            uniq_ords_id = {
-                row[0]: row[1]
-                for row in df[["№ заказа",
-                               "Наименование детали, узла, продукции, вида ремонта"]].to_numpy()
-                if len(row[0].split(" ")) == 4}
-            for ord_id, name in uniq_ords_id.items():
-                if ord_id in ords:
-                    ords[ord_id] = name
-            workers_info_in_month["ords"] = ords
-
-    def input_date_in_transcript_of_the_pd(self, workers_info: dict):
-
-        file_dest = list(filter_name_files(self.files_name, self.pattern_dest).keys())[0]
-
-        sheet_names = get_sh_names(file_dest)
-        check_month = {name.lower().strip(): ind for ind, name in enumerate(sheet_names)}
-        for month in workers_info.keys():
-            workers_info_in_month = workers_info[month]
-            uniq_ords_id = workers_info_in_month["ords"]
-            twenty_third = {ord_id: name for ord_id, name in uniq_ords_id.items() if ord_id.startswith("00 07")}
-            uniq_ords_id = {ord_id: name for ord_id, name in uniq_ords_id.items() if ord_id not in twenty_third}
-            uniq_ords_id = {**twenty_third, **uniq_ords_id}
-            uniq_ords_id = list(uniq_ords_id.items())
-            if month.lower() not in check_month:
-                continue
-            month_ind = check_month[month]
-            wb = load_workbook(file_dest)
-            ws = wb.get_sheet_by_name(sheet_names[month_ind])
-
-            cell_rows = [5, 4]
-            start_cell_cols = 4
-            step_cell_cols = 2
-            uniq_ords_col_ids = {}
-            for ind_tuple, row in enumerate(cell_rows):
-                for col, order in enumerate(uniq_ords_id, start=start_cell_cols):
-                    col *= step_cell_cols
-                    if ind_tuple == 0:
-                        uniq_ords_col_ids[order[0]] = col
-                    ws.cell(row=row,
-                            column=col,
-                            value=order[ind_tuple])
-            uniq_ords_col_ids["цех"] = 136 * 2
-
-            not_existed_names: dict = {}
-            row_ind = 9
-            names_for_delete = []
-            while True:
-                name = ws.cell(row=row_ind, column=2).value
-                if isinstance(name, str):
-                    if name in workers_info_in_month:
-                        names_for_delete.append(name)
-                        worker_info = workers_info_in_month[name].items()
-                        hours = 0
-                        for col, ord_info in enumerate(worker_info,
-                                                       start=start_cell_cols):
-                            ord_id, hour = ord_info
-                            # hour = datetime.time(hour=int(hour[0:2]), minute=int(hour[4:6]), second=int(hour[6:8]))
-
-                            getcontext().prec = 5
-                            hour = decimal.Decimal(hour.seconds) / 3600 + decimal.Decimal(hour.days) * 24
-                            hours += hour
-                            col = uniq_ords_col_ids[ord_id.lower()]
-                            ws.cell(row=row_ind,
-                                    column=col,
-                                    value=hour)
-                        ws.cell(row=row_ind, column=5, value=hours)
-                    elif name.lower() == "итого":
-                        break
-                    else:
-                        not_existed_names[name] = None
-                    row_ind += 1
+            rows = wb.get_sheet_by_name(sh_name).to_python(skip_empty_area=False)
+            # Один рабочий может быть в нарядах нескольких цехов — часы суммируются
+            name = read_executor_name(rows[:7], sh_name, file)
+            for raw_order, raw_hours in read_month_outfit(rows, sh_name, file):
+                hours = parse_hours(raw_hours)
+                if hours is None:
+                    print(
+                        f"Пропущена строка без времени: {file}, лист {sh_name}, заказ {raw_order}"
+                    )
+                    continue
+                order = normalize_order_code(raw_order)
+                if order:
+                    data.workers[name][order] += hours
+                    data.orders.setdefault(order, "")
+                elif WORKSHOP_ORDER in raw_order.lower():
+                    data.workers[name][WORKSHOP_ORDER] += hours
                 else:
-                    break
-            for name in names_for_delete:
-                workers_info_in_month.pop(name)
-            if len(not_existed_names) > 0:
-                names_from_outfit: dict = {"Имена взяты из ЗП, которым не нашли пару": not_existed_names,
-                                           "Имена взяты из нарядов, которым не нашли пару": list(workers_info_in_month.keys()),
-                                           "Пояснение": ["Если слово не совпадёт хоть на пробел, оно не учтётся, ",
-                                                         "данные "
-                                                         "берутся из наряда справа-сверху в ячейке исполнитель.",
-                                                         "",
-                                                         "Просто сверь именя взятые из ЗП с именами взятыми из нарядов",
-                                                         "",
-                                                         "Самый редкий случай, когда кто-то вместо русской С добавил "
-                                                         "английскую C",
-                                                         "Разницу не заметит никто, кроме программы"],
-                                           }
-            else:
-                names_from_outfit = {"Всё окей по мнению программы": None}
-            with open(curr_dir + info_dir + "ФИО которых нет в ЗП.json", "w", encoding="utf8") as f:
-                f.write(json.dumps(names_from_outfit, default=serialize_datetime, ensure_ascii=False, indent=4))
+                    data.not_included[name][raw_order] += hours
+    return months
 
-            wb.save(file_dest)
+
+def read_order_names(file: str, months: dict[str, MonthData]):
+    wb = CalamineWorkbook.from_path(file)
+    sheets = {sh_name.lower().strip(): sh_name for sh_name in wb.sheet_names}
+    for month, data in months.items():
+        if month not in sheets:
+            print(
+                f"В плане производства нет листа «{month}», названия заказов не заполнены"
+            )
+            continue
+        rows = wb.get_sheet_by_name(sheets[month]).to_python(skip_empty_area=False)
+        header_ind = next(
+            ind for ind, row in enumerate(rows) if PLAN_ORDER_HEADER in row
+        )
+        header = rows[header_ind]
+        order_col, name_col = (
+            header.index(PLAN_ORDER_HEADER),
+            header.index(PLAN_NAME_HEADER),
+        )
+        for row in rows[header_ind + 1 :]:
+            order = normalize_order_code(cell_text(row[order_col]))
+            if order in data.orders:
+                data.orders[order] = row[name_col]
+
+
+def order_columns(orders: dict[str, str]) -> dict[str, int]:
+    codes = sorted(orders, key=lambda code: (not code.startswith(TOOLING_PREFIX), code))
+    columns = {
+        code: ZP_FIRST_ORDER_COL + ind * ZP_ORDER_COL_STEP
+        for ind, code in enumerate(codes)
+    }
+    if columns and max(columns.values()) >= ZP_WORKSHOP_COL:
+        raise Exception(
+            f"Заказов ({len(columns)}) больше, чем столбцов в ЗП до столбца «цех»"
+        )
+    columns[WORKSHOP_ORDER] = ZP_WORKSHOP_COL
+    return columns
+
+
+def write_salary_sheet(ws, data: MonthData) -> dict:
+    """Записывает часы в лист ЗП и возвращает отчёт о несовпавших ФИО."""
+    columns = order_columns(data.orders)
+    hours_columns = range(ZP_FIRST_ORDER_COL, ZP_WORKSHOP_COL + 1, ZP_ORDER_COL_STEP)
+
+    # Шапка: стираем заказы прошлых запусков и пишем текущие
+    for col in hours_columns[:-1]:
+        ws.cell(row=ZP_ORDER_NAME_ROW, column=col).value = None
+        ws.cell(row=ZP_ORDER_CODE_ROW, column=col).value = None
+    for order, col in columns.items():
+        if order != WORKSHOP_ORDER:
+            ws.cell(row=ZP_ORDER_NAME_ROW, column=col, value=data.orders[order])
+            ws.cell(row=ZP_ORDER_CODE_ROW, column=col, value=order)
+
+    zp_names_not_found = []
+    written = set()
+    row = ZP_FIRST_WORKER_ROW
+    while (
+        isinstance(name := ws.cell(row=row, column=ZP_NAME_COL).value, str)
+        and name.lower() != "итого"
+    ):
+        if name in data.workers:
+            written.add(name)
+            for col in hours_columns:
+                ws.cell(row=row, column=col).value = None
+            worker_orders = data.workers[name]
+            for order, hours in worker_orders.items():
+                ws.cell(row=row, column=columns[order], value=to_hours(hours))
+            ws.cell(
+                row=row,
+                column=ZP_TOTAL_COL,
+                value=to_hours(sum(worker_orders.values(), datetime.timedelta())),
+            )
+        else:
+            zp_names_not_found.append(name)
+        row += 1
+
+    outfit_names_not_found = [name for name in data.workers if name not in written]
+    if not zp_names_not_found and not outfit_names_not_found:
+        return {"Всё окей по мнению программы": None}
+    return {
+        "Имена взяты из ЗП, которым не нашли пару": zp_names_not_found,
+        "Имена взяты из нарядов, которым не нашли пару": outfit_names_not_found,
+        "Пояснение": [
+            "Если слово не совпадёт хоть на пробел, оно не учтётся, ",
+            "данные берутся из наряда справа-сверху в ячейке исполнитель.",
+            "",
+            "Просто сверь имена взятые из ЗП с именами взятыми из нарядов",
+            "",
+            "Самый редкий случай, когда кто-то вместо русской С добавил английскую C",
+            "Разницу не заметит никто, кроме программы",
+        ],
+    }
+
+
+def write_salary(file: str, months: dict[str, MonthData]) -> dict:
+    wb = load_workbook(file)
+    sheets = {sh_name.lower().strip(): sh_name for sh_name in wb.sheetnames}
+    report = {}
+    for month, data in months.items():
+        if month not in sheets:
+            print(f"В файле ЗП нет листа «{month}», месяц пропущен")
+            continue
+        report[month] = write_salary_sheet(wb[sheets[month]], data)
+    wb.save(file)
+    return report
+
+
+def sorted_by_key(d: dict) -> dict:
+    return dict(sorted(d.items()))
+
+
+def run():
+    os.makedirs(curr_dir + info_dir, exist_ok=True)
+    files = get_name_files()
+
+    print("Загрузка данных о рабочих началась")
+    source_files = filter_name_files(files, PATTERN_SOURCE)
+    if not source_files:
+        raise Exception("Не найден файл с именем наряд")
+    months = read_outfits(source_files)
+    print("Загрузка данных о рабочих окончилась")
+
+    print("Загрузка номеров заказов из плана производства началась")
+    read_order_names(find_single_file(files, PATTERN_PLAN), months)
+    print("Загрузка номеров заказов из плана производства окончилась")
+
+    save_json(
+        "Все заказы в общем и заказы каждого рабочего.json",
+        {
+            month: {
+                **{
+                    name: sorted_by_key(orders)
+                    for name, orders in sorted_by_key(data.workers).items()
+                },
+                "ords": sorted_by_key(data.orders),
+            }
+            for month, data in months.items()
+        },
+    )
+    save_json(
+        "Не вошедшие в ЗП заказы.json",
+        {
+            month: {name: dict(orders) for name, orders in data.not_included.items()}
+            for month, data in months.items()
+        },
+    )
+
+    print("Редактирование файла ЗП началось")
+    report = write_salary(find_single_file(files, PATTERN_DEST), months)
+    save_json("ФИО которых нет в ЗП.json", report)
+    print("Редактирование файла ЗП окончилось")
