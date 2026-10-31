@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Перенос часов</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232f9ab3'/><path d='M5 19c4-4 7 4 11 0s7 4 11 0' stroke='white' stroke-width='3' fill='none' stroke-linecap='round'/></svg>">
+<style>
+  @property --accent { syntax: "<color>"; inherits: true; initial-value: #2f9ab3; }
+  :root {
+    --accent: #2f9ab3;
+    --ink: #1d1d1f;
+    --ink-soft: #6e6e73;
+    --glass: rgba(255, 255, 255, 0.58);
+    --glass-strong: rgba(255, 255, 255, 0.8);
+    --hairline: rgba(0, 0, 0, 0.08);
+    --ok: #34c759;
+    --warn: #ff9f0a;
+    --err: #ff453a;
+    --spring: cubic-bezier(.34, 1.56, .64, 1);
+    --smooth: cubic-bezier(.2, .8, .2, 1);
+    transition: --accent 2s ease;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--ink);
+    background: #cfe9ef;
+    transition: background 2s ease;
+    overflow-x: hidden;
+  }
+
+  /* ---------- Сцены ---------- */
+  #stage { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+  .layer { position: absolute; inset: 0; opacity: 0; transform: scale(1.05);
+           transition: opacity 2.2s ease, transform 3s var(--smooth); }
+  .layer.shown { opacity: 1; transform: none; }
+  .layer .bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .layer .side { position: absolute; bottom: 0; height: auto; }
+  .side.left { left: 0; width: min(52vw, 760px); }
+  .side.right { right: 0; width: min(46vw, 680px); }
+
+  .drift { animation: drift var(--dur) linear infinite; }
+  @keyframes drift { to { transform: translateX(calc(var(--p) * -1px)); } }
+  .cloud { animation: cloud var(--dur) linear infinite; animation-delay: var(--delay); }
+  @keyframes cloud { from { transform: translateX(-400px); } to { transform: translateX(2000px); } }
+  .fly { animation: fly var(--dur) linear infinite; animation-delay: var(--delay); }
+  @keyframes fly { from { transform: translateX(-200px); } to { transform: translateX(1800px); } }
+  .wander { animation: wander var(--dur) linear infinite; animation-delay: var(--delay); }
+  @keyframes wander { from { transform: translateX(-300px); } to { transform: translateX(1900px); } }
+  .flap { animation: flap var(--flap, .8s) ease-in-out infinite alternate; transform-box: fill-box; transform-origin: center; }
+  @keyframes flap { to { transform: scaleY(.25); } }
+  .wing { animation: wing var(--flap, .3s) ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes wing { to { transform: scaleY(-.6); } }
+  .glide { animation: glide 2.4s ease-in-out infinite; }
+  @keyframes glide { 50% { transform: translateY(-8px); } }
+  .sun-glow { animation: glow 8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes glow { 50% { transform: scale(1.08); opacity: .85; } }
+  .sparkle { animation: twinkle var(--dur) ease-in-out infinite; animation-delay: var(--delay); }
+  @keyframes twinkle { 0%, 100% { opacity: 0; } 50% { opacity: .9; } }
+  .foam { animation: foam 7s ease-in-out infinite; }
+  @keyframes foam { 0%, 100% { transform: translate(0, 0); opacity: .55; } 50% { transform: translate(14px, -10px); opacity: .9; } }
+  .beacon { animation: beacon 3s ease-in-out infinite; }
+  @keyframes beacon { 50% { opacity: .2; } }
+  .swim-slow { animation: swim 70s ease-in-out infinite; }
+  @keyframes swim { 50% { transform: translateX(140px); } }
+  .whale-bob { animation: bobbing 6s ease-in-out infinite; }
+  .bob { animation: bobbing 4s ease-in-out infinite; }
+  @keyframes bobbing { 50% { transform: translateY(8px); } }
+  .spout { animation: spout 9s ease-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes spout { 0%, 55% { opacity: 0; transform: scale(.3, 0); } 62% { opacity: .95; transform: scale(1); }
+                     80% { opacity: .7; transform: scale(1.08, 1.05); } 92%, 100% { opacity: 0; transform: scale(1.1); } }
+  .breathe { animation: breathe 4.5s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes breathe { 50% { transform: scale(1.015, 1.035); } }
+  .blink { animation: blink 6s infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+  .flipper { animation: flipper 5s ease-in-out infinite; transform-box: fill-box; transform-origin: 80% 20%; }
+  @keyframes flipper { 0%, 60%, 100% { transform: rotate(0); } 70% { transform: rotate(-14deg); } 80% { transform: rotate(4deg); } 90% { transform: rotate(-10deg); } }
+  .fin { animation: fin 4s ease-in-out infinite; transform-box: fill-box; transform-origin: 100% 50%; }
+  @keyframes fin { 0%, 50%, 100% { transform: rotate(0); } 60% { transform: rotate(-28deg); } 70% { transform: rotate(6deg); } 80% { transform: rotate(-22deg); } 90% { transform: rotate(0); } }
+  .tail { animation: tail 5s ease-in-out infinite; transform-box: fill-box; transform-origin: 100% 0; }
+  @keyframes tail { 50% { transform: rotate(7deg); } }
+  .head-tilt { animation: tilt 8s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes tilt { 0%, 40%, 100% { transform: rotate(0); } 50%, 70% { transform: rotate(-6deg); } }
+  .look { animation: look 9s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes look { 0%, 20%, 100% { transform: none; } 30%, 45% { transform: translateX(-3px) rotate(-9deg); } 60%, 75% { transform: translateX(3px) rotate(9deg); } }
+  .sway { animation: sway 5s ease-in-out infinite; animation-delay: var(--d, 0s); transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes sway { 50% { transform: rotate(4deg); } }
+  .sway-tree { animation: sway-tree 7s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes sway-tree { 50% { transform: rotate(1.5deg); } }
+  .hover { animation: hover 1.8s ease-in-out infinite; }
+  @keyframes hover { 50% { transform: translate(3px, -7px); } }
+  .buzz { animation: buzz .12s linear infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes buzz { from { transform: rotate(-35deg); } to { transform: rotate(25deg) scaleY(.7); } }
+  .float { animation: float 5s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes float { 50% { transform: translateY(6px) rotate(-3deg); } }
+  .ripple { animation: ripple 5s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes ripple { 50% { transform: scale(1.15); opacity: .3; } }
+  .balloon { animation: balloon 16s ease-in-out infinite; }
+  @keyframes balloon { 50% { transform: translate(-24px, -34px); } }
+  .wing-l, .wing-r { animation: bwing .22s ease-in-out infinite alternate; transform-box: fill-box; }
+  .wing-l { transform-origin: 100% 50%; }
+  .wing-r { transform-origin: 0 50%; }
+  @keyframes bwing { to { transform: scaleX(.25); } }
+  .ear-l, .ear-r { transform-box: fill-box; transform-origin: 50% 100%; }
+  .ear-l { animation: ear-l 7s ease-in-out infinite; }
+  .ear-r { animation: ear-r 7s ease-in-out infinite; animation-delay: -2s; }
+  @keyframes ear-l { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(-3deg); } }
+  @keyframes ear-r { 0%, 100% { transform: rotate(8deg); } 50% { transform: rotate(14deg); } }
+  .nose { animation: nose 3s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes nose { 0%, 70%, 100% { transform: scale(1); } 75%, 85% { transform: scale(1.18, .9); } 80%, 90% { transform: scale(1); } }
+
+  /* ---------- Реакции зверьков: класс feel-* на слое сцены ---------- */
+  .pet { cursor: pointer; transform-box: fill-box; transform-origin: 50% 100%; }
+  .pet .eyes { transform-box: fill-box; transform-origin: center; transition: transform .5s var(--smooth), opacity .3s; }
+  .pet .eyes-happy, .pet .tear { opacity: 0; transition: opacity .4s; }
+  .tear path { animation: tear 2.2s ease-in infinite; }
+  @keyframes tear { from { transform: translateY(0); opacity: 1; } to { transform: translateY(22px); opacity: 0; } }
+
+  .feel-success .pet, .pet.poke { animation: cheer 1.1s cubic-bezier(.3, .7, .4, 1) 2; }
+  .pet.poke { animation-iteration-count: 1; }
+  @keyframes cheer { 0%, 100% { transform: none; } 18% { transform: scale(1.05, .93); }
+                     45% { transform: translateY(-30px) scale(.97, 1.05); } 70% { transform: scale(1.04, .96); } 85% { transform: translateY(-6px); } }
+  .feel-success .eyes, .pet.poke .eyes { opacity: 0; }
+  .feel-success .eyes-happy, .pet.poke .eyes-happy { opacity: 1; }
+
+  .feel-error .pet { animation: droop 1.6s var(--smooth) forwards; }
+  @keyframes droop { to { transform: translateY(5px) rotate(-2deg) scale(1, .97); } }
+  .feel-error .tear { opacity: 1; }
+  .feel-error .eyes { transform: scaleY(.75); }
+
+  .feel-working .pet { animation: curious 3.2s ease-in-out infinite; }
+  @keyframes curious { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(2.5deg) translateY(-3px); } 65% { transform: rotate(-2deg); } }
+
+  .feel-nod .pet { animation: nod .7s ease-in-out 2; }
+  @keyframes nod { 50% { transform: translateY(-8px) scale(1.02, .98); } }
+
+  .feel-sleepy .pet { animation: sleepy 4s ease-in-out forwards; }
+  @keyframes sleepy { 30%, 100% { transform: scale(1.02, .97); } }
+  .feel-sleepy .eyes { transform: scaleY(.12); }
+
+  .floater { position: fixed; z-index: 1; pointer-events: none; font-weight: 700; color: #ff7a9c;
+             text-shadow: 0 2px 10px rgba(255, 255, 255, .8); animation: floater 2.6s var(--smooth) forwards; }
+  .floater.z { color: #8e7bd6; font-family: Georgia, serif; font-style: italic; }
+  @keyframes floater { from { opacity: 0; transform: translate(-50%, 0) scale(.5); } 20% { opacity: 1; }
+                       to { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -110px) scale(1.15); } }
+
+  /* ---------- Остров уведомлений сверху ---------- */
+  .island {
+    position: fixed; top: 14px; left: 50%; z-index: 3; display: flex; align-items: center; gap: 10px;
+    max-width: min(440px, calc(100vw - 32px)); height: 38px; padding: 0 18px 0 8px; border-radius: 999px;
+    color: #fff; background: rgba(18, 18, 20, .9); backdrop-filter: blur(20px);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .18); font-size: 14px; font-weight: 500;
+    transform: translateX(-50%) scale(.3, .5); opacity: 0; pointer-events: none;
+    transition: transform .55s var(--spring), opacity .25s;
+  }
+  .island.show { transform: translateX(-50%) scale(1); opacity: 1; }
+  .island-dot { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+                background: var(--accent); }
+  .island-dot svg { width: 14px; height: 14px; fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  .island-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- Панель сверху ---------- */
+  .top { position: fixed; top: 14px; right: 16px; z-index: 2; display: flex; gap: 8px; }
+  .icon-btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px;
+    border: 1px solid rgba(255, 255, 255, .5); border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500;
+    color: var(--ink); background: var(--glass); backdrop-filter: blur(20px) saturate(1.8);
+    cursor: pointer; transition: background .3s, transform .4s var(--spring);
+  }
+  .icon-btn:hover { background: var(--glass-strong); transform: translateY(-1px); }
+  .icon-btn:active { transform: scale(.94); }
+  .icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-btn.round { width: 36px; padding: 0; justify-content: center; }
+
+  /* ---------- Карточка ---------- */
+  main {
+    position: relative; z-index: 1; min-height: 100%; pointer-events: none;
+    display: flex; justify-content: center; align-items: flex-start; padding: 10vh 16px 40px;
+  }
+  .card {
+    pointer-events: auto; width: 100%; max-width: 540px; padding: 30px;
+    background: var(--glass); backdrop-filter: blur(30px) saturate(1.8);
+    border: 1px solid rgba(255, 255, 255, .55); border-radius: 28px;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .6) inset, 0 30px 80px rgba(0, 0, 0, .12), 0 4px 14px rgba(0, 0, 0, .05);
+    animation: rise 1s var(--spring) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(28px) scale(.96); } }
+  .card.shake { animation: shake .6s ease; }
+  @keyframes shake { 20% { transform: translateX(-8px); } 40% { transform: translateX(7px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
+  h1 { margin: 0 0 6px; font-size: 30px; font-weight: 700; letter-spacing: -.022em; }
+  .line { min-height: 22px; margin: 0; font-size: 16px; color: var(--ink-soft);
+          transition: opacity .5s, filter .5s, transform .6s var(--spring); }
+  .fade { opacity: 0; filter: blur(5px); transform: translateY(5px); }
+
+  /* ---------- Кнопки настроения ---------- */
+  .moods { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; max-height: 80px;
+           transition: max-height .6s var(--smooth), opacity .4s, margin .6s var(--smooth); }
+  .moods.collapse { max-height: 0; opacity: 0; margin-top: 0; }
+  .mood {
+    position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 8px;
+    height: 40px; padding: 0 16px 0 7px; border: 1px solid rgba(255, 255, 255, .7); border-radius: 999px;
+    font: inherit; font-size: 15px; font-weight: 500; color: var(--ink);
+    background: rgba(255, 255, 255, .62); box-shadow: 0 2px 10px rgba(0, 0, 0, .05);
+    cursor: pointer; animation: pop-in .7s var(--spring) both; animation-delay: calc(var(--i) * 90ms + 300ms);
+    transition: transform .5s var(--spring), background .3s, box-shadow .3s, opacity .35s, filter .35s;
+  }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(.8); } }
+  /* Блик, который время от времени пробегает по кнопке — приглашает нажать */
+  .mood::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .85) 50%, transparent 65%);
+    transform: translateX(-120%); animation: sheen 7s ease-in-out infinite; animation-delay: calc(var(--i) * 1.1s + 2s);
+  }
+  @keyframes sheen { 0%, 80% { transform: translateX(-120%); } 95%, 100% { transform: translateX(120%); } }
+  .mood:hover { transform: translateY(-3px) scale(1.04); background: #fff;
+                box-shadow: 0 10px 24px color-mix(in srgb, var(--c) 35%, transparent); }
+  .mood:active { transform: scale(.94); transition-duration: .15s; }
+  .face { width: 28px; height: 28px; flex: none; overflow: visible;
+          animation: hello 6s ease-in-out infinite; animation-delay: calc(var(--i) * 2s + 1s);
+          transition: transform .5s var(--spring); }
+  @keyframes hello { 0%, 86%, 100% { transform: none; } 90% { transform: rotate(-14deg) scale(1.12); } 94% { transform: rotate(10deg); } 97% { transform: rotate(-4deg); } }
+  .face .skin { fill: var(--c); }
+  .face .feature { fill: none; stroke: #3a3340; stroke-width: 1.9; stroke-linecap: round; }
+  .face .cheek { fill: #ff8fa8; opacity: .55; }
+  .face .f-eye, .face .f-mouth { transform-box: fill-box; transform-origin: center; transition: transform .4s var(--spring); }
+  .mood:hover .face { transform: scale(1.18) rotate(-8deg); animation: none; }
+  .mood:hover .f-mouth { transform: scale(1.25, 1.35); }
+  .mood:hover .f-eye { animation: face-blink .9s ease 1; }
+  @keyframes face-blink { 40% { transform: scaleY(.15); } }
+  .mood.picked { background: color-mix(in srgb, var(--c) 28%, #fff); transform: scale(1.08); pointer-events: none; }
+  .mood.picked .face { animation: picked .9s var(--spring); }
+  @keyframes picked { 30% { transform: scale(1.5) rotate(-18deg); } 60% { transform: scale(.9) rotate(10deg); } }
+  .mood.gone { opacity: 0; transform: scale(.6); filter: blur(4px); pointer-events: none; }
+
+  .spark { position: fixed; z-index: 4; pointer-events: none; width: var(--s); height: var(--s); margin: calc(var(--s) / -2);
+           border-radius: 50%; background: var(--c); animation: spark .95s var(--smooth) forwards; }
+  .spark.heart { width: auto; height: auto; margin: 0; background: none; color: var(--c); font-size: var(--s); line-height: 1;
+                 transform: translate(-50%, -50%); }
+  .spark.square { border-radius: 3px; }
+  @keyframes spark { from { opacity: 1; transform: translate(-50%, -50%) scale(.4); }
+                     70% { opacity: 1; }
+                     to { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)) scale(1); } }
+
+  .name-form { display: flex; gap: 8px; margin-top: 14px; animation: pop-in .5s var(--spring); }
+  .name-form input {
+    flex: 1; min-width: 0; height: 40px; border: 1px solid var(--hairline); border-radius: 12px; padding: 0 12px;
+    font: inherit; color: var(--ink); background: rgba(255, 255, 255, .75); outline: none;
+    transition: border-color .3s, box-shadow .3s;
+  }
+  .name-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .pill { height: 40px; padding: 0 16px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; color: #fff;
+          background: var(--accent); cursor: pointer; transition: transform .4s var(--spring); }
+  .pill:active { transform: scale(.94); }
+
+  /* ---------- Поля файлов ---------- */
+  .zones { display: grid; gap: 8px; margin: 24px 0 20px; }
+  .zone {
+    position: relative; display: grid; grid-template-columns: 40px 1fr auto; gap: 2px 14px; align-items: center;
+    padding: 13px 14px; border-radius: 18px; border: 1px solid rgba(255, 255, 255, .6);
+    background: rgba(255, 255, 255, .5); cursor: pointer;
+    transition: background .3s, transform .45s var(--spring), box-shadow .3s;
+  }
+  .zone:hover { background: rgba(255, 255, 255, .78); }
+  .zone:active { transform: scale(.985); }
+  .zone.over { background: #fff; transform: scale(1.02); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent), 0 12px 30px rgba(0, 0, 0, .08); }
+  .zone-icon { grid-row: span 2; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+               background: var(--tile); box-shadow: 0 4px 12px color-mix(in srgb, var(--tile) 35%, transparent); }
+  .zone-icon svg { width: 21px; height: 21px; fill: none; stroke: #fff; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .zone-title { font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
+  .zone-hint { font-size: 13px; color: var(--ink-soft); }
+  .badge { grid-column: 3; grid-row: 1 / span 2; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+           background: var(--ok); transform: scale(0); transition: transform .5s var(--spring); }
+  .badge svg { width: 13px; height: 13px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .zone.filled .badge { transform: scale(1); }
+  /* Явная кнопка выбора: клик по любому месту поля открывает проводник */
+  .pick { grid-column: 3; grid-row: 1 / span 2; height: 32px; padding: 0 14px; border-radius: 999px;
+          display: inline-flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--accent);
+          background: color-mix(in srgb, var(--accent) 14%, #fff); transition: transform .45s var(--spring), background .3s; }
+  .zone:hover .pick { background: color-mix(in srgb, var(--accent) 22%, #fff); transform: scale(1.05); }
+  .zone.filled .pick { display: none; }
+  .zone[data-role=outfit].filled .pick { display: inline-flex; height: 28px; padding: 0 12px; font-size: 13px; }
+  .zone[data-role=outfit].filled .badge { display: none; }
+  .files { grid-column: 2 / span 2; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .files:empty { display: none; }
+  .file {
+    display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 28px;
+    padding: 0 4px 0 10px; border-radius: 9px; font-size: 13px; background: rgba(255, 255, 255, .9);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .06); animation: pop-in .5s var(--spring);
+  }
+  .file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file button { border: 0; background: none; color: var(--ink-soft); cursor: pointer; font-size: 16px;
+                 line-height: 1; width: 22px; height: 22px; border-radius: 6px; }
+  .file button:hover { background: rgba(0, 0, 0, .06); }
+  .file.loading { opacity: .55; }
+
+  /* ---------- Главная кнопка ---------- */
+  .primary {
+    position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; height: 52px; border: 0; border-radius: 16px; font: inherit; font-size: 17px; font-weight: 600;
+    letter-spacing: -.01em; color: #fff; background: var(--accent); cursor: pointer;
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 35%, transparent);
+    transition: opacity .3s, transform .45s var(--spring), box-shadow .3s;
+  }
+  .primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 14px 32px color-mix(in srgb, var(--accent) 42%, transparent); }
+  .primary:active:not(:disabled) { transform: scale(.97); transition-duration: .15s; }
+  .primary:disabled { opacity: .4; cursor: default; box-shadow: none; }
+  .primary.busy { opacity: 1; }
+  .primary.busy::before { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .28) 50%, transparent 70%);
+    animation: shimmer 1.6s linear infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, .35);
+             border-top-color: #fff; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- Результат ---------- */
+  .result { margin-top: 18px; animation: pop-in .6s var(--spring); }
+  .result:empty { display: none; }
+  .status { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; font-weight: 600; font-size: 16px; }
+  .status svg { flex: none; width: 30px; height: 30px; fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .status.ok svg { stroke: var(--ok); }
+  .status.err svg { stroke: var(--warn); }
+  .status .draw { stroke-dasharray: 160; stroke-dashoffset: 160; animation: draw .9s var(--smooth) forwards; }
+  .status .draw.late { animation-delay: .35s; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .download {
+    display: flex; align-items: center; justify-content: center; gap: 8px; height: 48px; text-decoration: none;
+    border-radius: 14px; font-weight: 600; color: #fff; background: var(--ok);
+    box-shadow: 0 10px 24px rgba(52, 199, 89, .3); transition: transform .45s var(--spring);
+  }
+  .download:hover { transform: translateY(-1px); }
+  .download:active { transform: scale(.97); }
+  .download svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  details { margin-top: 12px; font-size: 13px; color: var(--ink-soft); }
+  summary { cursor: pointer; }
+  pre {
+    max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    padding: 12px; border-radius: 12px; background: rgba(255, 255, 255, .65);
+    font: 12px/1.5 "SF Mono", Menlo, Consolas, ui-monospace, monospace;
+  }
+  .hidden { display: none !important; }
+
+  @media (max-width: 560px) {
+    .card { padding: 22px 18px; border-radius: 24px; }
+    h1 { font-size: 24px; }
+    .top .label { display: none; }
+    main { padding-top: 70px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Общие фильтры для всех сцен -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- Пушистый край: шум слегка смещает контур фигуры -->
+    <filter id="fur" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="3" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="7" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+</svg>
+
+<div id="stage"></div>
+
+<div class="island" id="island"><span class="island-dot" id="islandIcon"></span><span class="island-text" id="islandText"></span></div>
+
+<div class="top">
+  <button class="icon-btn" id="sceneBtn" title="Сменить место">
+    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg>
+    <span class="label" id="sceneName"></span>
+  </button>
+  <button class="icon-btn round" id="nameBtn" title="Изменить имя">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+  </button>
+  <button class="icon-btn round" id="musicBtn" title="Тихая музыка"></button>
+</div>
+
+<main>
+  <section class="card" id="card">
+    <h1 id="greeting">Здравствуйте</h1>
+    <p class="line" id="line"></p>
+    <div class="moods" id="moods"></div>
+    <form class="name-form hidden" id="nameForm">
+      <input id="nameInput" maxlength="40" placeholder="Как к вам обращаться?" autocomplete="off">
+      <button class="pill" type="submit">Готово</button>
+    </form>
+
+    <div class="zones">
+      <label class="zone" data-role="outfit" style="--tile:#ff9f0a">
+        <div class="zone-icon"><svg viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
+        <div class="zone-title">Наряды цехов</div>
+        <div class="zone-hint">Можно несколько файлов, месяц — в названии</div>
+        <span class="pick">Выбрать</span>
+        <span class="badge"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <div class="files"></div>
+        <input type="file" accept=".xlsx,.xls" multiple hidden>
+      </label>
+      <label class="zone" data-role="plan" style="--tile:#0a84ff">
+        <div class="zone-icon"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg></div>
+        <div class="zone-title">План производства</div>
+        <div class="zone-hint">Один файл</div>
+        <span class="pick">Выбрать</span>
+        <span class="badge"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <div class="files"></div>
+        <input type="file" accept=".xlsx,.xls" hidden>
+      </label>
+      <label class="zone" data-role="dest" style="--tile:#34c759">
+        <div class="zone-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></div>
+        <div class="zone-title">Расшифровка ЗП</div>
+        <div class="zone-hint">Один файл — в него запишутся часы</div>
+        <span class="pick">Выбрать</span>
+        <span class="badge"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <div class="files"></div>
+        <input type="file" accept=".xlsx,.xls" hidden>
+      </label>
+    </div>
+
+    <button class="primary" id="runBtn" disabled>Перенести часы</button>
+    <div class="result" id="result"></div>
+  </section>
+</main>
+
+<script src="scenes.js"></script>
+<script>
+const $ = (sel) => document.querySelector(sel);
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const session = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => (b % 36).toString(36)).join("");
+const store = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); } catch {} },
+};
+const ICONS = {
+  scene: '<svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 3-3 6 5"/></svg>',
+  file: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  ok: '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  err: '<svg viewBox="0 0 24 24"><path d="M12 6v7M12 17.5v.5"/></svg>',
+  heart: '<svg viewBox="0 0 24 24"><path d="M12 19s-7-4.5-7-9.5A3.8 3.8 0 0 1 12 7a3.8 3.8 0 0 1 7 2.5C19 14.5 12 19 12 19z"/></svg>',
+};
+
+/* ---------- Остров уведомлений ---------- */
+let islandTimer = null;
+function island(text, icon = "scene", ms = 2600) {
+  $("#islandIcon").innerHTML = ICONS[icon] || ICONS.scene;
+  $("#islandText").textContent = text;
+  $("#island").classList.add("show");
+  clearTimeout(islandTimer);
+  islandTimer = setTimeout(() => $("#island").classList.remove("show"), ms);
+}
+
+/* ---------- Сцены: при каждом открытии другая, потом сменяются сами ---------- */
+const SCENE_EVERY = 4 * 60 * 1000;
+let sceneIndex = -1, busy = false;
+
+function showScene(index, announce) {
+  const scene = SCENES[index];
+  sceneIndex = index;
+  store.set("scene", scene.id);
+  const layer = document.createElement("div");
+  layer.className = "layer";
+  layer.innerHTML = `
+    <svg class="bg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMax slice" aria-hidden="true">${scene.bg()}</svg>
+    <svg class="side left" viewBox="0 540 800 360" preserveAspectRatio="xMinYMax meet" aria-hidden="true">${scene.left()}</svg>
+    <svg class="side right" viewBox="880 540 720 360" preserveAspectRatio="xMaxYMax meet" aria-hidden="true">${scene.right()}</svg>`;
+  const stage = $("#stage"), old = [...stage.children];
+  stage.append(layer);
+  setupPets(layer);
+  if (feeling) layer.classList.add(`feel-${feeling}`);
+  requestAnimationFrame(() => requestAnimationFrame(() => layer.classList.add("shown")));
+  // Старая сцена остаётся под новой, пока та не проявится полностью
+  setTimeout(() => old.forEach((o) => o.remove()), 2600);
+  document.documentElement.style.setProperty("--accent", scene.accent);
+  document.body.style.background = scene.base;
+  $("#sceneName").textContent = scene.name;
+  if (announce) island(scene.name, "scene");
+}
+
+function setupScenes() {
+  const last = SCENES.findIndex((s) => s.id === store.get("scene"));
+  const choices = SCENES.map((_, i) => i).filter((i) => i !== last);
+  showScene(pick(choices), false);
+  $("#sceneBtn").onclick = () => showScene((sceneIndex + 1) % SCENES.length, true);
+  setInterval(() => {
+    if (!busy && !document.hidden) showScene((sceneIndex + 1) % SCENES.length, true);
+  }, SCENE_EVERY);
+}
+
+/* ---------- Реакции зверьков ---------- */
+let feeling = null, feelTimer = null;
+
+function react(kind, ms) {
+  clearTimeout(feelTimer);
+  feeling = kind;
+  for (const layer of $("#stage").children) {
+    layer.classList.remove(...[...layer.classList].filter((c) => c.startsWith("feel-")));
+    void layer.offsetWidth;  // перезапуск анимации, если реакция та же
+    if (kind) layer.classList.add(`feel-${kind}`);
+  }
+  if (ms) feelTimer = setTimeout(() => react(busy ? "working" : null), ms);
+}
+
+function currentPets() {
+  const layer = $("#stage").lastElementChild;
+  return layer ? [...layer.querySelectorAll(".pet")] : [];
+}
+
+function floatAt(x, y, text, cls = "", dx = 0) {
+  const f = document.createElement("div");
+  f.className = `floater ${cls}`;
+  f.textContent = text;
+  f.style.left = `${x}px`;
+  f.style.top = `${y}px`;
+  f.style.fontSize = `${20 + Math.random() * 10}px`;
+  f.style.setProperty("--dx", `${dx}px`);
+  document.body.append(f);
+  setTimeout(() => f.remove(), 2700);
+}
+
+function overPets(text, cls, count = 1) {
+  for (const pet of currentPets()) {
+    const r = pet.getBoundingClientRect();
+    if (!r.width) continue;
+    for (let i = 0; i < count; i++) {
+      setTimeout(() => floatAt(r.left + r.width * (0.3 + Math.random() * 0.4), r.top, text, cls, (Math.random() - 0.5) * 50), i * 450);
+    }
+  }
+}
+
+function setupPets(layer) {
+  for (const pet of layer.querySelectorAll(".pet")) {
+    pet.addEventListener("click", (e) => {
+      pet.classList.remove("poke");
+      void pet.getBBox();
+      pet.classList.add("poke");
+      setTimeout(() => pet.classList.remove("poke"), 1200);
+      floatAt(e.clientX, e.clientY - 20, "♥");
+    });
+  }
+}
+
+function burst(x, y, colors, count = 14, spread = 80) {
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement("div");
+    const kind = Math.random();
+    s.className = "spark" + (kind < 0.25 ? " heart" : kind < 0.5 ? " square" : "");
+    if (kind < 0.25) s.textContent = "♥";
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const dist = spread * (0.5 + Math.random() * 0.7);
+    s.style.left = `${x}px`;
+    s.style.top = `${y}px`;
+    s.style.setProperty("--c", pick(colors));
+    s.style.setProperty("--s", `${kind < 0.25 ? 14 + Math.random() * 8 : 6 + Math.random() * 6}px`);
+    s.style.setProperty("--dx", `${Math.cos(angle) * dist}px`);
+    s.style.setProperty("--dy", `${Math.sin(angle) * dist - 20}px`);
+    s.style.setProperty("--rot", `${(Math.random() - 0.5) * 360}deg`);
+    document.body.append(s);
+    setTimeout(() => s.remove(), 1000);
+  }
+}
+
+/* ---------- Тихая музыка: генерируется в браузере, без файлов ---------- */
+const music = {
+  ctx: null, master: null, timers: [], volume: 0.045,
+  start() {
+    if (this.ctx) {
+      this.ctx.resume();
+      this.fade(this.volume, 3);
+      return;
+    }
+    const ctx = (this.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    this.master = ctx.createGain();
+    this.master.gain.value = 0;
+    this.master.connect(ctx.destination);
+    this.fade(this.volume, 6);
+
+    // Мягкое эхо для «простора»
+    this.bus = ctx.createBiquadFilter();
+    this.bus.type = "lowpass";
+    this.bus.frequency.value = 1500;
+    const delay = ctx.createDelay();
+    delay.delayTime.value = 0.42;
+    const feedback = ctx.createGain();
+    feedback.gain.value = 0.38;
+    this.bus.connect(this.master);
+    this.bus.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(this.master);
+
+    this.waves();
+    const chords = [
+      [261.6, 329.6, 392.0, 493.9], [220.0, 261.6, 329.6, 392.0],
+      [174.6, 220.0, 261.6, 329.6], [196.0, 246.9, 293.7, 329.6],
+    ];
+    let step = 0;
+    const playChord = () => chords[step++ % chords.length].forEach((f) => this.voice(f, 0.05, 3, 9));
+    playChord();
+    this.timers.push(setInterval(playChord, 8000));
+    const bell = () => {
+      this.voice(pick([523.3, 587.3, 659.3, 784.0, 880.0]), 0.035, 0.02, 3);
+      this.timers.push(setTimeout(bell, 2500 + Math.random() * 4500));
+    };
+    this.timers.push(setTimeout(bell, 3000));
+  },
+  stop() {
+    if (!this.ctx) return;
+    this.fade(0, 1.5);
+    setTimeout(() => store.get("music") === "off" && this.ctx.suspend(), 1600);
+  },
+  fade(value, seconds) {
+    const g = this.master.gain, now = this.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(value, now + seconds);
+  },
+  voice(freq, level, attack, length) {
+    const ctx = this.ctx, now = ctx.currentTime;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(level, now + attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + length);
+    env.connect(this.bus);
+    for (const [type, detune] of [["sine", 0], ["triangle", 5]]) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = freq;
+      osc.detune.value = detune;
+      osc.connect(env);
+      osc.start(now);
+      osc.stop(now + length + 0.1);
+    }
+  },
+  waves() {
+    // Шум прибоя: «коричневый» шум, громкость медленно накатывает и отступает
+    const ctx = this.ctx, len = ctx.sampleRate * 4;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate), data = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+      data[i] = last * 3.5;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 480;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.22;
+    const lfo = ctx.createOscillator(), depth = ctx.createGain();
+    lfo.frequency.value = 0.09;
+    depth.gain.value = 0.18;
+    lfo.connect(depth).connect(gain.gain);
+    src.connect(lp).connect(gain).connect(this.master);
+    src.start();
+    lfo.start();
+  },
+};
+
+function renderMusicBtn() {
+  const off = store.get("music") === "off";
+  $("#musicBtn").innerHTML = off
+    ? '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>'
+    : '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9a4.5 4.5 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>';
+  $("#musicBtn").title = off ? "Музыка выключена" : "Тихая музыка";
+}
+
+function setupMusic() {
+  renderMusicBtn();
+  // Звук разрешён только после клика или клавиши; pointerdown встроенный Chromium жестом не считает.
+  // Слушаем, пока звук действительно не заиграет
+  const gestures = ["click", "keydown"];
+  const first = () => {
+    if (store.get("music") === "off") return;
+    music.start();
+    music.ctx.resume().then(() => gestures.forEach((g) => document.removeEventListener(g, first)));
+  };
+  gestures.forEach((g) => document.addEventListener(g, first));
+  $("#musicBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const off = store.get("music") !== "off";
+    store.set("music", off ? "off" : "on");
+    off ? music.stop() : music.start();
+    renderMusicBtn();
+  });
+}
+
+/* ---------- Персональные сообщения ---------- */
+let messages = null, wishTimer = null;
+
+function fill(text) {
+  const name = store.get("name");
+  return name ? text.replaceAll("{name}", name) : text.replace(/,?\s*\{name\}/g, "");
+}
+
+function say(text) {
+  const line = $("#line");
+  line.classList.add("fade");
+  setTimeout(() => { line.textContent = fill(text); line.classList.remove("fade"); }, 450);
+}
+
+function dayPart() {
+  const h = new Date().getHours();
+  return h < 5 ? "night" : h < 12 ? "morning" : h < 18 ? "day" : h < 23 ? "evening" : "night";
+}
+
+function greet() {
+  $("#greeting").textContent = fill(pick(messages.greetings[dayPart()]));
+}
+
+function startWishes(delay) {
+  clearInterval(wishTimer);
+  setTimeout(() => {
+    say(pick(messages.wishes));
+    wishTimer = setInterval(() => say(pick(messages.wishes)), 15000);
+  }, delay);
+}
+
+// Вид кнопки настроения: цвет, рожица и как откликаются зверьки
+const MOOD_LOOKS = {
+  great: { color: "#ffc93c", reaction: "success", float: "♥", burst: ["#ffc93c", "#ff8fa8", "#ffb340"] },
+  ok: { color: "#7fd3f0", reaction: "nod", float: null, burst: ["#7fd3f0", "#a8e6cf", "#ffffff"] },
+  tired: { color: "#c3a8f5", reaction: "sleepy", float: "z", burst: ["#c3a8f5", "#e0d4ff", "#ffc6d6"] },
+};
+const FACES = {
+  great: `<path class="feature f-eye" d="M9 14q2.3-2.8 4.6 0M18.4 14q2.3-2.8 4.6 0"/><path class="feature f-mouth" d="M10 18.5q6 6.5 12 0"/>`,
+  ok: `<g class="f-eye"><circle cx="11.3" cy="14" r="1.8" fill="#3a3340"/><circle cx="20.7" cy="14" r="1.8" fill="#3a3340"/></g><path class="feature f-mouth" d="M11.5 20q4.5 2.4 9 0"/>`,
+  tired: `<path class="feature f-eye" d="M8.8 14.5q2.5 1.8 5 0M18.2 14.5q2.5 1.8 5 0"/><ellipse class="f-mouth" cx="16" cy="21" rx="2" ry="2.4" fill="#3a3340"/>`,
+};
+
+function faceSvg(kind) {
+  return `<svg class="face" viewBox="0 0 32 32"><circle class="skin" cx="16" cy="16" r="15"/>
+    <circle class="cheek" cx="8.5" cy="19" r="2.6"/><circle class="cheek" cx="23.5" cy="19" r="2.6"/>${FACES[kind]}</svg>`;
+}
+
+function askMood() {
+  say(pick(messages.questions));
+  const box = $("#moods");
+  const keys = Object.keys(MOOD_LOOKS);
+  messages.moods.forEach((mood, i) => {
+    const kind = MOOD_LOOKS[mood.icon] ? mood.icon : keys[i % keys.length];
+    const look = MOOD_LOOKS[kind];
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mood";
+    b.style.setProperty("--c", look.color);
+    b.style.setProperty("--i", i);
+    b.innerHTML = faceSvg(kind);
+    b.append(mood.label);
+    b.onclick = () => {
+      b.classList.add("picked");
+      for (const other of box.children) if (other !== b) other.classList.add("gone");
+      const r = b.getBoundingClientRect();
+      burst(r.left + 21, r.top + r.height / 2, look.burst, 16);
+      react(look.reaction, 4500);
+      if (look.float) overPets(look.float, look.float === "z" ? "z" : "", 3);
+      say(pick(mood.replies));
+      setTimeout(() => box.classList.add("collapse"), 2200);
+      setTimeout(() => { box.replaceChildren(); box.classList.remove("collapse"); }, 2900);
+      startWishes(9000);
+    };
+    box.append(b);
+  });
+}
+
+function setupName() {
+  const form = $("#nameForm"), input = $("#nameInput");
+  const open = () => { form.classList.remove("hidden"); input.value = store.get("name") || ""; input.focus(); };
+  $("#nameBtn").onclick = open;
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    store.set("name", input.value.trim());
+    form.classList.add("hidden");
+    greet();
+    react("nod", 1500);
+  };
+  if (!store.get("name")) open();
+}
+
+/* ---------- Файлы ---------- */
+const files = { outfit: [], plan: [], dest: [] };
+const PATTERNS = [["outfit", /наряд/], ["plan", /план/], ["dest", /зп/]];
+const ROLE_NAMES = { outfit: "Наряды", plan: "План", dest: "Расшифровка ЗП" };
+
+function detectRole(name) {
+  const lower = name.toLowerCase();
+  return (PATTERNS.find(([, re]) => re.test(lower)) || [])[0];
+}
+
+function api(path, params, body) {
+  const q = new URLSearchParams({ session, ...params });
+  return fetch(`${path}?${q}`, { method: "POST", body }).then((r) => r.json());
+}
+
+function render() {
+  for (const zone of document.querySelectorAll(".zone")) {
+    const role = zone.dataset.role, box = zone.querySelector(".files");
+    zone.classList.toggle("filled", files[role].some((f) => !f.loading));
+    zone.querySelector(".pick").textContent = files[role].length ? "Добавить" : "Выбрать";
+    box.replaceChildren(...files[role].map((f) => {
+      const chip = document.createElement("div");
+      chip.className = "file" + (f.loading ? " loading" : "");
+      const span = document.createElement("span");
+      span.textContent = f.name;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "×";
+      del.title = "Убрать";
+      del.onclick = (e) => { e.preventDefault(); e.stopPropagation(); removeFile(role, f.name); };
+      chip.append(span, del);
+      return chip;
+    }));
+  }
+  const ready = files.outfit.length && files.plan.length && files.dest.length
+    && !Object.values(files).flat().some((f) => f.loading);
+  $("#runBtn").disabled = !ready;
+}
+
+async function addFile(role, file) {
+  if (!/\.xlsx?$/i.test(file.name)) return showResult(false, `«${file.name}» — не файл Excel`);
+  const list = role === "outfit" ? files.outfit.filter((f) => f.name !== file.name) : [];
+  const entry = { name: file.name, loading: true };
+  files[role] = [...list, entry];
+  $("#result").replaceChildren();
+  render();
+  const res = await api("/api/upload", { role, name: file.name }, file).catch(() => null);
+  if (!res || !res.ok) {
+    files[role] = files[role].filter((f) => f !== entry);
+    showResult(false, res ? res.log : "Не удалось загрузить файл");
+  } else {
+    entry.loading = false;
+    island(`${ROLE_NAMES[role]}: ${file.name}`, "file", 2200);
+    if (!busy) react("nod", 1500);
+  }
+  render();
+}
+
+function removeFile(role, name) {
+  files[role] = files[role].filter((f) => f.name !== name);
+  api("/api/remove", { role, name });
+  render();
+}
+
+function addFiles(list, fallbackRole) {
+  for (const file of list) {
+    const role = detectRole(file.name) || fallbackRole;
+    if (role) addFile(role, file);
+    else showResult(false, `Не понял, куда положить «${file.name}» — перетащите его на нужное поле`);
+  }
+}
+
+function setupZones() {
+  for (const zone of document.querySelectorAll(".zone")) {
+    const input = zone.querySelector("input");
+    input.onchange = () => { addFiles(input.files, zone.dataset.role); input.value = ""; };
+    zone.addEventListener("dragenter", () => zone.classList.add("over"));
+    zone.addEventListener("dragleave", (e) => !zone.contains(e.relatedTarget) && zone.classList.remove("over"));
+  }
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  // Файл, брошенный на поле, ложится в него; брошенный мимо — по названию
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const zone = e.target.closest && e.target.closest(".zone");
+    document.querySelectorAll(".zone.over").forEach((z) => z.classList.remove("over"));
+    const files = e.dataTransfer.files;
+    if (!files.length) return;
+    if (zone) for (const f of files) addFile(zone.dataset.role, f);
+    else addFiles(files);
+  });
+}
+
+/* ---------- Запуск ---------- */
+function statusIcon(ok) {
+  return ok
+    ? '<svg viewBox="0 0 32 32"><circle class="draw" cx="16" cy="16" r="13.5"/><path class="draw late" d="M10 16.5l4 4 8-9"/></svg>'
+    : '<svg viewBox="0 0 32 32"><circle class="draw" cx="16" cy="16" r="13.5"/><path class="draw late" d="M16 9.5v8M16 22v.5"/></svg>';
+}
+
+function showResult(ok, log, fileName) {
+  const box = $("#result");
+  const status = document.createElement("p");
+  status.className = `status ${ok ? "ok" : "err"}`;
+  status.innerHTML = statusIcon(ok);
+  status.append(ok ? pick(messages.success) : pick(messages.error));
+  const parts = [status];
+  if (fileName) {
+    const a = document.createElement("a");
+    a.className = "download";
+    a.href = `/api/download?session=${session}`;
+    a.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>';
+    const inWindow = () => window.pywebview && window.pywebview.api;
+    a.append(inWindow() ? `Сохранить «${fileName}»…` : `Скачать «${fileName}»`);
+    const thanks = () => {
+      setTimeout(() => say(pick(messages.goodbye)), 800);
+      react("success", 2400);
+      overPets("♥", "", 2);
+    };
+    // В окне приложения ссылка на скачивание не работает — сохраняем через системный диалог
+    a.onclick = async (e) => {
+      if (!inWindow()) return thanks();
+      e.preventDefault();
+      const res = await window.pywebview.api.save(session).catch(() => ({ ok: false }));
+      if (res.ok) {
+        island(`Сохранено: ${res.name}`, "ok", 3000);
+        thanks();
+      } else if (!res.cancelled) {
+        island("Не удалось сохранить файл", "err", 3000);
+      }
+    };
+    parts.push(a);
+  }
+  if (log) {
+    const details = document.createElement("details");
+    details.open = !ok;
+    const summary = document.createElement("summary");
+    summary.textContent = "Подробности";
+    const pre = document.createElement("pre");
+    pre.textContent = log.trim();
+    details.append(summary, pre);
+    parts.push(details);
+  }
+  box.replaceChildren(...parts);
+  if (!ok) {
+    const card = $("#card");
+    card.classList.remove("shake");
+    void card.offsetWidth;
+    card.classList.add("shake");
+    react("error", 6000);
+  }
+}
+
+async function runTransfer() {
+  const btn = $("#runBtn");
+  btn.disabled = true;
+  btn.classList.add("busy");
+  btn.innerHTML = '<span class="spinner"></span>Переношу…';
+  busy = true;
+  react("working");
+  clearInterval(wishTimer);
+  say(pick(messages.working));
+  $("#result").replaceChildren();
+  const res = await api("/api/run", {}).catch(() => ({ ok: false, log: "Нет связи с программой — она точно запущена?" }));
+  busy = false;
+  btn.classList.remove("busy");
+  btn.textContent = "Перенести часы";
+  render();
+  showResult(res.ok, res.log, res.file);
+  if (res.ok) {
+    const r = btn.getBoundingClientRect();
+    burst(r.left + r.width / 2, r.top + r.height / 2, ["#34c759", "#ffc93c", "#ff8fa8", "#7fd3f0", "#c3a8f5"], 30, 160);
+    react("success", 3000);
+    overPets("♥", "", 3);
+    island("Часы перенесены", "ok", 3000);
+  } else {
+    island("Не получилось — смотрите подробности", "err", 3200);
+  }
+  // Если на вопрос о настроении ещё не ответили — не перебиваем его пожеланиями
+  if ($("#moods").children.length) say(pick(messages.questions));
+  else startWishes(6000);
+}
+
+async function init() {
+  setupScenes();
+  setupMusic();
+  setupZones();
+  $("#runBtn").onclick = runTransfer;
+  messages = await fetch("/messages.json").then((r) => r.json());
+  setupName();
+  greet();
+  askMood();
+}
+init();
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@ xlsxwriter = "^3.2.0"
 ujson = "^5.9.0"
 pyinstaller = "^6.6.0"
 keyboard = "^0.13.5"
+pywebview = "^6.2"
 
 
 [build-system]

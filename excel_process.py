@@ -216,7 +216,7 @@ def read_month_outfit(rows: list, sh_name: str, filename: str):
 def read_outfits(files: list[str]) -> dict[str, MonthData]:
     months: dict[str, MonthData] = defaultdict(MonthData)
     for file in files:
-        month = find_month(file)
+        month = find_month(os.path.basename(file))
         if month is None:
             raise Exception(f"В имени файла {file} не указан месяц")
         data = months[month]
@@ -360,19 +360,25 @@ def sorted_by_key(d: dict) -> dict:
     return dict(sorted(d.items()))
 
 
-def run():
+def run(
+    source_files: list[str] | None = None,
+    plan_file: str | None = None,
+    dest_file: str | None = None,
+):
+    """Без аргументов файлы ищутся в текущей папке по имени (консольный режим)."""
     os.makedirs(curr_dir + info_dir, exist_ok=True)
-    files = get_name_files()
+    files = get_name_files() if source_files is None else []
 
     print("Загрузка данных о рабочих началась")
-    source_files = filter_name_files(files, PATTERN_SOURCE)
+    if source_files is None:
+        source_files = filter_name_files(files, PATTERN_SOURCE)
     if not source_files:
         raise Exception("Не найден файл с именем наряд")
     months = read_outfits(source_files)
     print("Загрузка данных о рабочих окончилась")
 
     print("Загрузка номеров заказов из плана производства началась")
-    read_order_names(find_single_file(files, PATTERN_PLAN), months)
+    read_order_names(plan_file or find_single_file(files, PATTERN_PLAN), months)
     print("Загрузка номеров заказов из плана производства окончилась")
 
     save_json(
@@ -400,6 +406,6 @@ def run():
     )
 
     print("Редактирование файла ЗП началось")
-    report = write_salary(find_single_file(files, PATTERN_DEST), months)
+    report = write_salary(dest_file or find_single_file(files, PATTERN_DEST), months)
     save_json("ФИО которых нет в ЗП.json", report)
     print("Редактирование файла ЗП окончилось")
