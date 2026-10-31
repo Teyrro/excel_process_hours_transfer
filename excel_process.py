@@ -69,7 +69,7 @@ ORDER_CODE_RE = re.compile(r"\d{7,8}", re.ASCII)
 
 @dataclass
 class MonthData:
-    # ФИО -> код заказа -> часы
+    # ФИО (normalize_name) -> код заказа -> часы
     workers: dict = field(
         default_factory=lambda: defaultdict(lambda: defaultdict(datetime.timedelta))
     )
@@ -79,6 +79,13 @@ class MonthData:
     )
     # код заказа -> наименование из плана производства
     orders: dict = field(default_factory=dict)
+    # ФИО (normalize_name) -> ФИО как оно записано в наряде, для отчётов
+    names: dict = field(default_factory=dict)
+
+
+def normalize_name(name: str) -> str:
+    """Ключ для сопоставления ФИО: «Иванов И. И.», «Иванов И.И», «иванов ИИ» -> «ивановии»."""
+    return re.sub(r"[\s.]+", "", name).lower()
 
 
 def normalize_order_code(raw: str) -> str | None:
@@ -220,6 +227,8 @@ def read_outfits(files: list[str]) -> dict[str, MonthData]:
             rows = wb.get_sheet_by_name(sh_name).to_python(skip_empty_area=False)
             # Один рабочий может быть в нарядах нескольких цехов — часы суммируются
             name = read_executor_name(rows[:7], sh_name, file)
+            key = normalize_name(name)
+            data.names.setdefault(key, name)
             for raw_order, raw_hours in read_month_outfit(rows, sh_name, file):
                 hours = parse_hours(raw_hours)
                 if hours is None:
@@ -229,12 +238,12 @@ def read_outfits(files: list[str]) -> dict[str, MonthData]:
                     continue
                 order = normalize_order_code(raw_order)
                 if order:
-                    data.workers[name][order] += hours
+                    data.workers[key][order] += hours
                     data.orders.setdefault(order, "")
                 elif WORKSHOP_ORDER in raw_order.lower():
-                    data.workers[name][WORKSHOP_ORDER] += hours
+                    data.workers[key][WORKSHOP_ORDER] += hours
                 else:
-                    data.not_included[name][raw_order] += hours
+                    data.not_included[key][raw_order] += hours
     return months
 
 
@@ -297,11 +306,12 @@ def write_salary_sheet(ws, data: MonthData) -> dict:
         isinstance(name := ws.cell(row=row, column=ZP_NAME_COL).value, str)
         and name.lower() != "итого"
     ):
-        if name in data.workers:
-            written.add(name)
+        key = normalize_name(name)
+        if key in data.workers:
+            written.add(key)
             for col in hours_columns:
                 ws.cell(row=row, column=col).value = None
-            worker_orders = data.workers[name]
+            worker_orders = data.workers[key]
             for order, hours in worker_orders.items():
                 ws.cell(row=row, column=columns[order], value=to_hours(hours))
             ws.cell(
@@ -313,14 +323,16 @@ def write_salary_sheet(ws, data: MonthData) -> dict:
             zp_names_not_found.append(name)
         row += 1
 
-    outfit_names_not_found = [name for name in data.workers if name not in written]
+    outfit_names_not_found = [
+        data.names[key] for key in data.workers if key not in written
+    ]
     if not zp_names_not_found and not outfit_names_not_found:
         return {"Всё окей по мнению программы": None}
     return {
         "Имена взяты из ЗП, которым не нашли пару": zp_names_not_found,
         "Имена взяты из нарядов, которым не нашли пару": outfit_names_not_found,
         "Пояснение": [
-            "Если слово не совпадёт хоть на пробел, оно не учтётся, ",
+            "Регистр, пробелы и точки в ФИО не важны, остальное должно совпадать буква в букву, ",
             "данные берутся из наряда справа-сверху в ячейке исполнитель.",
             "",
             "Просто сверь имена взятые из ЗП с именами взятыми из нарядов",
@@ -368,8 +380,8 @@ def run():
         {
             month: {
                 **{
-                    name: sorted_by_key(orders)
-                    for name, orders in sorted_by_key(data.workers).items()
+                    data.names[key]: sorted_by_key(orders)
+                    for key, orders in sorted_by_key(data.workers).items()
                 },
                 "ords": sorted_by_key(data.orders),
             }
@@ -379,7 +391,10 @@ def run():
     save_json(
         "Не вошедшие в ЗП заказы.json",
         {
-            month: {name: dict(orders) for name, orders in data.not_included.items()}
+            month: {
+                data.names[key]: dict(orders)
+                for key, orders in data.not_included.items()
+            }
             for month, data in months.items()
         },
     )
